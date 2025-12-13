@@ -20,16 +20,26 @@ io.on("connection", (socket) => {
       }
   });
 
-  // REGISTRO
+  // === SISTEMA DE REPORT ===
+  socket.on("reportar-jogador", (dadosReport) => {
+      console.log("🚨 REPORT RECEBIDO:", dadosReport);
+      // Aqui você pode salvar num banco de dados depois
+      // reports.push(dadosReport); 
+  });
+
+// Agora recebemos 'championId' também
   socket.on("registrar-usuario", (dados) => {
-    const { puuid, peerId, nome, iconId } = dados;
+    const { puuid, peerId, nome, iconId, championId } = dados; // <--- ADICIONE championId
+
     if (puuid && peerId) {
         usuariosOnline[puuid] = {
             socketId: socket.id,
             peerId: peerId,
             nome: nome || "Invocador",
-            iconId: iconId || 29
+            iconId: iconId || 29,
+            championId: championId || 0 // <--- ADICIONE ISSO (0 = sem champ)
         };
+        // console.log(`📝 Registrado: ${nome}`);
     }
   });
 
@@ -42,8 +52,9 @@ io.on("connection", (socket) => {
           aliadosEncontrados.push({
               peerId: aliado.peerId,
               nome: aliado.nome,
-              puuid: puuid,
-              iconId: aliado.iconId
+              puuid: puuidDoAliado,
+              iconId: aliado.iconId,
+              championId: aliado.championId // <--- ADICIONE ISSO
           });
       }
     });
