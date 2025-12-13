@@ -12,6 +12,29 @@ let usuariosOnline = {};
 io.on("connection", (socket) => {
   console.log(`⚡ Conectado: ${socket.id}`);
 
+  // ========================================================
+  // 4. SISTEMA DE PING (NOVO)
+  // ========================================================
+  
+  // Passo 1: O Cliente manda um "Oi", o servidor responde "Oi" na hora.
+  // Isso serve pro cliente calcular quanto tempo demorou a viagem.
+  socket.on("ping-medicao", (timestamp) => {
+      socket.emit("pong-medicao", timestamp);
+  });
+
+  // Passo 2: O Cliente calculou o tempo e avisou: "Meu ping é 30ms".
+  // O servidor avisa TODO MUNDO: "O PeerId tal está com 30ms".
+  socket.on("publicar-ping", (ms) => {
+      // Procura quem é o dono desse socket
+      const puuid = Object.keys(usuariosOnline).find(key => usuariosOnline[key].socketId === socket.id);
+      
+      if(puuid) {
+          const user = usuariosOnline[puuid];
+          // Manda pra geral
+          io.emit("atualizacao-ping", { peerId: user.peerId, ms: ms });
+      }
+  });
+
   // Recebe: { puuid, peerId, nome, iconId }
   socket.on("registrar-usuario", (dados) => {
     const { puuid, peerId, nome, iconId } = dados;
