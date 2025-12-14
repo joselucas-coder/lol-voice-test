@@ -1,28 +1,24 @@
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 
-// O Render vai injetar a senha aqui automaticamente
-// Se for rodar local, certifique-se de configurar essa variável ou colar a string aqui para teste
 const MONGO_URI = process.env.MONGO_URI; 
-
 const PORT = process.env.PORT || 3000;
 
-// 1. CONEXÃO COM O MONGODB
 if (!MONGO_URI) {
     console.error("❌ ERRO: Variável MONGO_URI não encontrada!");
 } else {
     mongoose.connect(MONGO_URI)
-        .then(() => console.log("🍃 MongoDB Conectado com Sucesso!"))
-        .catch(err => console.error("❌ Erro ao conectar no MongoDB:", err));
+        .then(() => console.log("🍃 MongoDB Conectado!"))
+        .catch(err => console.error("❌ Erro Mongo:", err));
 }
 
-// 2. MODELOS (SCHEMAS)
+// 2. MODELOS
 const UsuarioSchema = new mongoose.Schema({
     puuid: { type: String, required: true, unique: true },
     ultimoNome: String,
     ultimoIcone: Number,
     ultimoLogin: Date,
-    championId: Number
+    championId: Number // 🔥 GARANTINDO QUE O CAMPEÃO EXISTE NO BANCO
 });
 
 const ReportSchema = new mongoose.Schema({
@@ -36,18 +32,16 @@ const ReportSchema = new mongoose.Schema({
 const Usuario = mongoose.model("Usuario", UsuarioSchema);
 const Report = mongoose.model("Report", ReportSchema);
 
-// 3. SOCKET.IO SERVER
 const io = new Server(PORT, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-console.log(`📡 Servidor VoIP (MongoDB Edition) rodando na porta ${PORT}...`);
+console.log(`📡 Servidor VoIP rodando na porta ${PORT}...`);
 
-let usuariosOnline = {}; // Memória rápida para o matchmaking
+let usuariosOnline = {}; 
 
 io.on("connection", (socket) => {
-  console.log(`⚡ Conectado: ${socket.id}`);
-
+  
   // PING
   socket.on("ping-medicao", (t) => socket.emit("pong-medicao", t));
   socket.on("publicar-ping", (ms) => {
@@ -58,54 +52,42 @@ io.on("connection", (socket) => {
       }
   });
 
-  // REGISTRO
+  // REGISTRO (AQUI ESTAVA O POSSÍVEL ERRO)
   socket.on("registrar-usuario", async (dados) => {
+    // 🔥 IMPORTANTE: Pegando championId explicitamente
     const { puuid, peerId, nome, iconId, championId } = dados;
 
     if (puuid && peerId) {
-        // Memória RAM (Rápido)
+        // Atualiza Memória RAM (Usada para resposta rápida no Lobby)
         usuariosOnline[puuid] = {
             socketId: socket.id,
             peerId: peerId,
             nome: nome || "Invocador",
             iconId: iconId || 29,
-            championId: championId || 0
+            championId: championId || 0 // 🔥 Salvando na memória
         };
 
-        console.log(`📝 Registrado: ${nome}`);
+        // Log para Debug no Render (Pra gente ver se está chegando)
+        if (championId && championId > 0) {
+            console.log(`🦸 ${nome} selecionou campeão ID: ${championId}`);
+        }
 
-        // Banco de Dados (Seguro)
+        // Atualiza Banco de Dados
         try {
             await Usuario.findOneAndUpdate(
                 { puuid: puuid },
                 { 
                     ultimoNome: nome, 
                     ultimoIcone: iconId, 
-                    championId: championId,
+                    championId: championId, // 🔥 Salvando no Mongo
                     ultimoLogin: new Date() 
                 },
                 { upsert: true, new: true }
             );
         } catch(e) {
-            console.error("Erro Mongo (Usuario):", e.message);
+            console.error("Erro Mongo:", e.message);
         }
     }
-  });
-
-  // REPORT
-  socket.on("reportar-jogador", async (dadosReport) => {
-      console.log("🚨 REPORT:", dadosReport);
-      try {
-          const novoReport = new Report({
-              denunciante: dadosReport.denunciante,
-              denunciado: dadosReport.denunciado,
-              motivo: dadosReport.motivo
-          });
-          await novoReport.save();
-          console.log("✅ Report salvo no banco!");
-      } catch(e) {
-          console.error("Erro Mongo (Report):", e.message);
-      }
   });
 
   // MATCHMAKING
@@ -113,21 +95,31 @@ io.on("connection", (socket) => {
     let aliadosEncontrados = [];
     listaDePuuidsDoTime.forEach((puuid) => {
       const aliado = usuariosOnline[puuid];
+      
+      // Se achou alguém online (que não sou eu)
       if (aliado && aliado.socketId !== socket.id) {
           aliadosEncontrados.push({
               peerId: aliado.peerId,
               nome: aliado.nome,
               puuid: puuid,
               iconId: aliado.iconId,
-              championId: aliado.championId
+              championId: aliado.championId // 🔥 ENVIANDO O CAMPEÃO DE VOLTA PRO APP
           });
       }
     });
 
     if (aliadosEncontrados.length > 0) {
-      console.log(`🔥 Match! Enviando ${aliadosEncontrados.length} aliados.`);
       socket.emit("aliados-encontrados", aliadosEncontrados);
     }
+  });
+
+  // REPORT
+  socket.on("reportar-jogador", async (dadosReport) => {
+      console.log("🚨 REPORT:", dadosReport);
+      try {
+          const novoReport = new Report(dadosReport);
+          await novoReport.save();
+      } catch(e) {}
   });
 
   socket.on("disconnect", () => {
