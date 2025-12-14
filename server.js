@@ -12,13 +12,13 @@ if (!MONGO_URI) {
         .catch(err => console.error("❌ Erro Mongo:", err));
 }
 
-// 2. MODELOS
+// SCHEMAS
 const UsuarioSchema = new mongoose.Schema({
     puuid: { type: String, required: true, unique: true },
     ultimoNome: String,
     ultimoIcone: Number,
     ultimoLogin: Date,
-    championId: Number // 🔥 GARANTINDO QUE O CAMPEÃO EXISTE NO BANCO
+    championId: Number 
 });
 
 const ReportSchema = new mongoose.Schema({
@@ -41,7 +41,8 @@ console.log(`📡 Servidor VoIP rodando na porta ${PORT}...`);
 let usuariosOnline = {}; 
 
 io.on("connection", (socket) => {
-  
+  console.log(`⚡ Conectado: ${socket.id}`); // ESSE LOG TEM QUE APARECER
+
   // PING
   socket.on("ping-medicao", (t) => socket.emit("pong-medicao", t));
   socket.on("publicar-ping", (ms) => {
@@ -52,34 +53,33 @@ io.on("connection", (socket) => {
       }
   });
 
-  // REGISTRO (AQUI ESTAVA O POSSÍVEL ERRO)
+  // REGISTRO
   socket.on("registrar-usuario", async (dados) => {
-    // 🔥 IMPORTANTE: Pegando championId explicitamente
     const { puuid, peerId, nome, iconId, championId } = dados;
 
     if (puuid && peerId) {
-        // Atualiza Memória RAM (Usada para resposta rápida no Lobby)
         usuariosOnline[puuid] = {
             socketId: socket.id,
             peerId: peerId,
             nome: nome || "Invocador",
             iconId: iconId || 29,
-            championId: championId || 0 // 🔥 Salvando na memória
+            championId: championId || 0 
         };
 
-        // Log para Debug no Render (Pra gente ver se está chegando)
-        if (championId && championId > 0) {
-            console.log(`🦸 ${nome} selecionou campeão ID: ${championId}`);
+        // LOG DE DEBUG PARA CAMPEÃO
+        if(championId && championId > 0) {
+            console.log(`🦸 ${nome} selecionou CHAMP ID: ${championId}`);
+        } else {
+            console.log(`📝 Registrado: ${nome} (Sem Champ)`);
         }
 
-        // Atualiza Banco de Dados
         try {
             await Usuario.findOneAndUpdate(
                 { puuid: puuid },
                 { 
                     ultimoNome: nome, 
                     ultimoIcone: iconId, 
-                    championId: championId, // 🔥 Salvando no Mongo
+                    championId: championId,
                     ultimoLogin: new Date() 
                 },
                 { upsert: true, new: true }
@@ -95,20 +95,19 @@ io.on("connection", (socket) => {
     let aliadosEncontrados = [];
     listaDePuuidsDoTime.forEach((puuid) => {
       const aliado = usuariosOnline[puuid];
-      
-      // Se achou alguém online (que não sou eu)
       if (aliado && aliado.socketId !== socket.id) {
           aliadosEncontrados.push({
               peerId: aliado.peerId,
               nome: aliado.nome,
               puuid: puuid,
               iconId: aliado.iconId,
-              championId: aliado.championId // 🔥 ENVIANDO O CAMPEÃO DE VOLTA PRO APP
+              championId: aliado.championId // Manda o champ de volta
           });
       }
     });
 
     if (aliadosEncontrados.length > 0) {
+      console.log(`🔥 Match! Enviando ${aliadosEncontrados.length} aliados.`);
       socket.emit("aliados-encontrados", aliadosEncontrados);
     }
   });
