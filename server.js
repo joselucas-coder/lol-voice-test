@@ -1,24 +1,24 @@
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 
+// --- CONFIGURAÇÃO ---
 const MONGO_URI = process.env.MONGO_URI; 
 const PORT = process.env.PORT || 3000;
 
-if (!MONGO_URI) {
-    console.error("❌ ERRO: Variável MONGO_URI não encontrada!");
-} else {
+// Conexão com Banco de Dados (Histórico e Reports)
+if (MONGO_URI) {
     mongoose.connect(MONGO_URI)
         .then(() => console.log("🍃 MongoDB Conectado!"))
         .catch(err => console.error("❌ Erro Mongo:", err));
 }
 
-// SCHEMAS
+// --- MODELOS (BANCO) ---
 const UsuarioSchema = new mongoose.Schema({
     puuid: { type: String, required: true, unique: true },
     ultimoNome: String,
     ultimoIcone: Number,
     ultimoLogin: Date,
-    championId: Number 
+    championId: Number
 });
 
 const ReportSchema = new mongoose.Schema({
@@ -32,87 +32,106 @@ const ReportSchema = new mongoose.Schema({
 const Usuario = mongoose.model("Usuario", UsuarioSchema);
 const Report = mongoose.model("Report", ReportSchema);
 
+// --- SERVIDOR SOCKET ---
 const io = new Server(PORT, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-console.log(`📡 Servidor VoIP rodando na porta ${PORT}...`);
+console.log(`📡 Servidor VoIP (Salas + Mongo) rodando na porta ${PORT}...`);
 
-let usuariosOnline = {}; 
+// Memória RAM (Rápida para salas)
+let usuarios = {}; 
+let salas = {};    
 
 io.on("connection", (socket) => {
-  console.log(`⚡ Conectado: ${socket.id}`); // ESSE LOG TEM QUE APARECER
-
-  // PING
+  
+  // 1. PING OTIMIZADO (Envia apenas para quem está na mesma sala)
   socket.on("ping-medicao", (t) => socket.emit("pong-medicao", t));
   socket.on("publicar-ping", (ms) => {
-      const puuid = Object.keys(usuariosOnline).find(k => usuariosOnline[k].socketId === socket.id);
-      if(puuid) {
-          const user = usuariosOnline[puuid];
-          io.emit("atualizacao-ping", { peerId: user.peerId, ms: ms });
+      const usuario = usuarios[socket.id];
+      if(usuario) {
+          const minhasSalas = Array.from(socket.rooms);
+          minhasSalas.forEach(salaId => {
+              if(salaId !== socket.id) {
+                  io.to(salaId).emit("atualizacao-ping", { peerId: usuario.peerId, ms: ms });
+              }
+          });
       }
   });
 
-  // REGISTRO
+  // 2. REGISTRO GERAL
   socket.on("registrar-usuario", async (dados) => {
     const { puuid, peerId, nome, iconId, championId } = dados;
 
     if (puuid && peerId) {
-        usuariosOnline[puuid] = {
+        // Salva na RAM
+        usuarios[socket.id] = {
             socketId: socket.id,
-            peerId: peerId,
-            nome: nome || "Invocador",
+            peerId, puuid, nome,
             iconId: iconId || 29,
-            championId: championId || 0 
+            championId: championId || 0
         };
 
-        // LOG DE DEBUG PARA CAMPEÃO
-        if(championId && championId > 0) {
-            console.log(`🦸 ${nome} selecionou CHAMP ID: ${championId}`);
-        } else {
-            console.log(`📝 Registrado: ${nome} (Sem Champ)`);
-        }
-
+        // Salva no Mongo
         try {
             await Usuario.findOneAndUpdate(
                 { puuid: puuid },
-                { 
-                    ultimoNome: nome, 
-                    ultimoIcone: iconId, 
-                    championId: championId,
-                    ultimoLogin: new Date() 
-                },
+                { ultimoNome: nome, ultimoIcone: iconId, championId: championId, ultimoLogin: new Date() },
                 { upsert: true, new: true }
             );
-        } catch(e) {
-            console.error("Erro Mongo:", e.message);
-        }
+        } catch(e) { console.error("Erro Mongo:", e.message); }
     }
   });
 
-  // MATCHMAKING
-  socket.on("procurar-partida", (listaDePuuidsDoTime) => {
-    let aliadosEncontrados = [];
-    listaDePuuidsDoTime.forEach((puuid) => {
-      const aliado = usuariosOnline[puuid];
-      if (aliado && aliado.socketId !== socket.id) {
-          aliadosEncontrados.push({
-              peerId: aliado.peerId,
-              nome: aliado.nome,
-              puuid: puuid,
-              iconId: aliado.iconId,
-              championId: aliado.championId // Manda o champ de volta
-          });
+  // 3. SISTEMA DE SALAS (RECONEXÃO)
+  socket.on("entrar-na-sala", (dados) => {
+      const { idSala, meuPuuid, timePuuids } = dados;
+      const usuario = usuarios[socket.id];
+
+      if (!usuario) return;
+
+      // Cria sala se não existir
+      if (!salas[idSala]) {
+          console.log(`🏠 Sala Criada: ${idSala.substring(0,8)}...`);
+          salas[idSala] = {
+              whitelist: timePuuids, // Lista de quem pode entrar (Baseado no time original)
+              criadaEm: Date.now()
+          };
       }
-    });
 
-    if (aliadosEncontrados.length > 0) {
-      console.log(`🔥 Match! Enviando ${aliadosEncontrados.length} aliados.`);
-      socket.emit("aliados-encontrados", aliadosEncontrados);
-    }
+      // Verifica Whitelist (Segurança)
+      const sala = salas[idSala];
+      if (sala.whitelist.includes(meuPuuid)) {
+          socket.join(idSala);
+          console.log(`✅ ${usuario.nome} entrou na sala.`);
+
+          // Avisa quem já está lá que eu entrei
+          socket.to(idSala).emit("usuario-entrou", {
+              peerId: usuario.peerId,
+              nome: usuario.nome,
+              puuid: usuario.puuid,
+              iconId: usuario.iconId,
+              championId: usuario.championId
+          });
+
+          // Pega quem já está lá e manda pra mim
+          const socketsNaSala = io.sockets.adapter.rooms.get(idSala);
+          let listaPresentes = [];
+          if (socketsNaSala) {
+              socketsNaSala.forEach(sid => {
+                  if (sid !== socket.id && usuarios[sid]) {
+                      listaPresentes.push(usuarios[sid]);
+                  }
+              });
+          }
+          socket.emit("aliados-encontrados", listaPresentes);
+
+      } else {
+          console.log(`⛔ Acesso negado: ${usuario.nome}`);
+      }
   });
 
-  // REPORT
+  // 4. REPORT
   socket.on("reportar-jogador", async (dadosReport) => {
       console.log("🚨 REPORT:", dadosReport);
       try {
@@ -122,7 +141,6 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-      const puuid = Object.keys(usuariosOnline).find(k => usuariosOnline[k].socketId === socket.id);
-      if(puuid) delete usuariosOnline[puuid];
+      delete usuarios[socket.id];
   });
 });
