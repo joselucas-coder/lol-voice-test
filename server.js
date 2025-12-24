@@ -50,31 +50,30 @@ io.on("connection", (socket) => {
       }
   });
 
-  // REGISTRO (CORRIGIDO PARA ATUALIZAR EM TEMPO REAL)
+  // REGISTRO E ATUALIZAÇÃO (CORRIGIDO)
   socket.on("registrar-usuario", async (dados) => {
     const { puuid, peerId, nome, iconId, championId } = dados;
 
     if (puuid && peerId) {
-        // 1. Atualiza RAM
+        // 1. Atualiza RAM com garantia de dados
         usuarios[socket.id] = {
             socketId: socket.id,
             peerId, puuid, nome,
             iconId: iconId || 29,
-            championId: championId || 0
+            championId: championId || 0 // Garante que 0 é enviado se não tiver champ
         };
 
-        // 2. 🔥 AVISA A SALA QUE MUDEI DE CAMPEÃO 🔥
-        // Pega as salas que estou conectado
+        // 2. 🔥 NOTIFICA A SALA SOBRE A MUDANÇA (CHAMP UPDATE) 🔥
         const minhasSalas = Array.from(socket.rooms);
         minhasSalas.forEach(salaId => {
-            // Não manda pra mim mesmo (socket.id é uma sala automática)
+            // Ignora a sala que é o próprio ID do socket
             if(salaId !== socket.id) {
-                // Reutiliza o evento 'usuario-entrou' pois o front já sabe atualizar cards existentes com ele
+                // Envia o objeto atualizado para todos na sala (incluindo o novo championId)
                 io.to(salaId).emit("usuario-entrou", usuarios[socket.id]);
             }
         });
 
-        // 3. Atualiza Mongo
+        // 3. Atualiza Mongo (Opcional, não bloqueante)
         try {
             await Usuario.findOneAndUpdate(
                 { puuid: puuid },
@@ -97,13 +96,15 @@ io.on("connection", (socket) => {
       }
 
       const sala = salas[idSala];
-      if (sala.whitelist.includes(meuPuuid)) {
+      
+      // Verifica whitelist (segurança simples)
+      if (sala.whitelist && (sala.whitelist.includes(meuPuuid) || sala.whitelist.length === 0)) {
           socket.join(idSala);
           
-          // Avisa os outros
+          // Avisa os outros que entrei
           socket.to(idSala).emit("usuario-entrou", usuarios[socket.id]);
 
-          // Pega quem tá lá
+          // Pega quem já está lá para me mandar
           const socketsNaSala = io.sockets.adapter.rooms.get(idSala);
           let listaPresentes = [];
           if (socketsNaSala) {
